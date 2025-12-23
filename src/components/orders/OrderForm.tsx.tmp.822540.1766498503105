@@ -1,0 +1,464 @@
+'use client'
+
+import { useState, useMemo, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { useToast } from '@/hooks/use-toast'
+import type { Product, Price } from '@/types'
+
+// Props 타입
+interface OrderFormProps {
+  products: (Product & { price?: Price })[]
+  destinations?: string[]
+  initialData?: {
+    id?: string
+    destination?: string
+    remarks?: string
+    items?: OrderItemData[]
+  }
+}
+
+// 발주 품목 데이터
+interface OrderItemData {
+  product_code: string
+  product_name: string
+  qty: number
+  cartons: number
+  pcs_per_carton: number
+  supply_price: number
+  commission: number
+  unit_price: number
+}
+
+// 목적지 목록 (기본값)
+const DEFAULT_DESTINATIONS = [
+  '블라디보스톡 VLADIVOSTOK',
+  '크라스노다르 KRASNODAR',
+  '모스크바 MOSCOW',
+  '노보시비르스크 NOVOSIBIRSK',
+  '민스크 MINSK',
+  '카자흐스탄 ALMATY',
+]
+
+export function OrderForm({ products, destinations, initialData }: OrderFormProps) {
+  const [destination, setDestination] = useState(initialData?.destination || '')
+  const [remarks, setRemarks] = useState(initialData?.remarks || '')
+  const [orderItems, setOrderItems] = useState<OrderItemData[]>(initialData?.items || [])
+  const [productDialogOpen, setProductDialogOpen] = useState(false)
+  const [productSearch, setProductSearch] = useState('')
+  const [brandFilter, setBrandFilter] = useState<string>('all')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const { toast } = useToast()
+  const router = useRouter()
+
+  // 브랜드 목록 추출
+  const brands = useMemo(() => {
+    const brandSet = new Set(products.map(p => p.brand).filter(Boolean))
+    return Array.from(brandSet).sort()
+  }, [products])
+
+  // 목적지 목록
+  const destinationList = destinations || DEFAULT_DESTINATIONS
+
+  // 제품 필터링 (이미 추가된 제품 제외)
+  const filteredProducts = useMemo(() => {
+    const addedCodes = new Set(orderItems.map(item => item.product_code))
+
+    return products.filter(product => {
+      if (addedCodes.has(product.product_code)) return false
+
+      const matchesSearch =
+        product.product_code.toLowerCase().includes(productSearch.toLowerCase()) ||
+        product.name_ko.toLowerCase().includes(productSearch.toLowerCase()) ||
+        (product.barcode && product.barcode.includes(productSearch))
+
+      const matchesBrand = brandFilter === 'all' || product.brand === brandFilter
+
+      return matchesSearch && matchesBrand
+    })
+  }, [products, orderItems, productSearch, brandFilter])
+
+  // 제품 추가
+  const addProduct = useCallback((product: Product & { price?: Price }) => {
+    const price = product.price
+    const newItem: OrderItemData = {
+      product_code: product.product_code,
+      product_name: product.name_ko,
+      qty: product.pcs_per_carton,
+      cartons: 1,
+      pcs_per_carton: product.pcs_per_carton,
+      supply_price: price?.supply_price || 0,
+      commission: price?.commission || 0,
+      unit_price: price?.final_price || 0
+    }
+    setOrderItems(prev => [...prev, newItem])
+  }, [])
+
+  // 제품 제거
+  const removeProduct = useCallback((productCode: string) => {
+    setOrderItems(prev => prev.filter(item => item.product_code !== productCode))
+  }, [])
+
+  // 수량 변경 (카톤 단위)
+  const updateCartons = useCallback((productCode: string, cartons: number) => {
+    setOrderItems(prev => prev.map(item => {
+      if (item.product_code !== productCode) return item
+      const newCartons = Math.max(1, cartons)
+      return {
+        ...item,
+        cartons: newCartons,
+        qty: newCartons * item.pcs_per_carton
+      }
+    }))
+  }, [])
+
+  // 합계 계산
+  const totals = useMemo(() => {
+    return orderItems.reduce((acc, item) => {
+      const subtotal = item.qty * item.unit_price
+      return {
+        items: acc.items + 1,
+        qty: acc.qty + item.qty,
+        cartons: acc.cartons + item.cartons,
+        amount: acc.amount + subtotal
+      }
+    }, { items: 0, qty: 0, cartons: 0, amount: 0 })
+  }, [orderItems])
+
+  // 발주서 제출
+  const handleSubmit = async (asDraft: boolean = true) => {
+    if (!destination) {
+      toast({
+        title: '목적지 선택 필요',
+        description: '목적지를 선택해주세요.',
+        variant: 'destructive'
+      })
+      return
+    }
+
+    if (orderItems.length === 0) {
+      toast({
+        title: '제품 추가 필요',
+        description: '최소 1개 이상의 제품을 추가해주세요.',
+        variant: 'destructive'
+      })
+      return
+    }
+
+    setIsSubmitting(true)
+    try {
+      const isUpdate = !!initialData?.id
+      const url = isUpdate ? `/api/orders/${initialData.id}` : '/api/orders'
+      const method = isUpdate ? 'PATCH' : 'POST'
+
+      // region_code 추출 (목적지에서)
+      let region_code = 'RU'
+      if (destination.includes('카자흐') || destination.includes('ALMATY')) {
+        region_code = 'KZ'
+      } else if (destination.includes('민스크') || destination.includes('MINSK')) {
+        region_code = 'BY'
+      }
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          destination,
+          remarks,
+          status: asDraft ? 'DRAFT' : 'CONFIRMED',
+          region_code,
+          items: orderItems.map(item => ({
+            product_code: item.product_code,
+            product_name: item.product_name,
+            pcs_per_ctn: item.pcs_per_carton,
+            qty: item.qty,
+            supply_price: item.supply_price,
+            commission: item.commission,
+            unit_price: item.unit_price
+          }))
+        })
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || '발주서 처리 실패')
+      }
+
+      toast({
+        title: isUpdate ? '발주서 수정 완료' : '발주서 생성 완료',
+        description: `발주번호: ${result.data?.order_number || result.order?.order_number}`,
+      })
+
+      router.push('/orders')
+      router.refresh()
+    } catch (error) {
+      console.error('Order submit error:', error)
+      toast({
+        title: '발주서 처리 실패',
+        description: error instanceof Error ? error.message : '알 수 없는 오류',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat('ko-KR').format(price)
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 기본 정보 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <label className="font-medium">목적지 *</label>
+          <Select value={destination} onValueChange={setDestination}>
+            <SelectTrigger>
+              <SelectValue placeholder="목적지를 선택하세요" />
+            </SelectTrigger>
+            <SelectContent>
+              {destinationList.map(dest => (
+                <SelectItem key={dest} value={dest}>
+                  {dest}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <label className="font-medium">비고</label>
+          <Textarea
+            placeholder="비고 사항..."
+            value={remarks}
+            onChange={(e) => setRemarks(e.target.value)}
+            rows={2}
+          />
+        </div>
+      </div>
+
+      {/* 제품 추가 버튼 */}
+      <div className="flex justify-between items-center">
+        <h3 className="font-medium">발주 품목 ({orderItems.length}개)</h3>
+        <Dialog open={productDialogOpen} onOpenChange={setProductDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>+ 제품 추가</Button>
+          </DialogTrigger>
+          <DialogContent className="max-w-4xl max-h-[80vh]">
+            <DialogHeader>
+              <DialogTitle>제품 선택</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              {/* 검색/필터 */}
+              <div className="flex gap-4">
+                <Input
+                  placeholder="품목코드, 품목명, 바코드 검색..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="flex-1"
+                />
+                <Select value={brandFilter} onValueChange={setBrandFilter}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue placeholder="브랜드" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">전체 브랜드</SelectItem>
+                    {brands.map(brand => (
+                      <SelectItem key={brand} value={brand as string}>
+                        {brand}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* 제품 목록 */}
+              <div className="border rounded-lg max-h-[400px] overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>품목코드</TableHead>
+                      <TableHead>브랜드</TableHead>
+                      <TableHead>품목명</TableHead>
+                      <TableHead className="text-center">입수량</TableHead>
+                      <TableHead className="text-right">단가</TableHead>
+                      <TableHead className="text-center">추가</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredProducts.slice(0, 50).map(product => (
+                      <TableRow key={product.product_code}>
+                        <TableCell className="font-mono">{product.product_code}</TableCell>
+                        <TableCell>{product.brand || '-'}</TableCell>
+                        <TableCell className="max-w-[200px] truncate">{product.name_ko}</TableCell>
+                        <TableCell className="text-center">{product.pcs_per_carton}</TableCell>
+                        <TableCell className="text-right">
+                          ₩{formatPrice(product.price?.final_price || 0)}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              addProduct(product)
+                              toast({ title: `${product.name_ko} 추가됨` })
+                            }}
+                          >
+                            추가
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                    {filteredProducts.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                          검색 결과가 없습니다.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                {filteredProducts.length}개 제품 (최대 50개 표시)
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      {/* 발주 품목 테이블 */}
+      {orderItems.length > 0 ? (
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>품목코드</TableHead>
+                <TableHead>품목명</TableHead>
+                <TableHead className="text-center">입수량</TableHead>
+                <TableHead className="text-center">박스수</TableHead>
+                <TableHead className="text-center">수량</TableHead>
+                <TableHead className="text-right">단가</TableHead>
+                <TableHead className="text-right">금액</TableHead>
+                <TableHead className="text-center">삭제</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orderItems.map(item => {
+                const subtotal = item.qty * item.unit_price
+                return (
+                  <TableRow key={item.product_code}>
+                    <TableCell className="font-mono">{item.product_code}</TableCell>
+                    <TableCell className="max-w-[200px] truncate">{item.product_name}</TableCell>
+                    <TableCell className="text-center">{item.pcs_per_carton}</TableCell>
+                    <TableCell className="text-center">
+                      <Input
+                        type="number"
+                        min="1"
+                        value={item.cartons}
+                        onChange={(e) => updateCartons(item.product_code, parseInt(e.target.value) || 1)}
+                        className="w-20 text-center"
+                      />
+                    </TableCell>
+                    <TableCell className="text-center font-medium">
+                      {item.qty.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">₩{formatPrice(item.unit_price)}</TableCell>
+                    <TableCell className="text-right font-medium">₩{formatPrice(subtotal)}</TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-red-600 hover:text-red-700"
+                        onClick={() => removeProduct(item.product_code)}
+                      >
+                        삭제
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="border rounded-lg p-8 text-center text-muted-foreground">
+          제품을 추가해주세요.
+        </div>
+      )}
+
+      {/* 합계 */}
+      {orderItems.length > 0 && (
+        <div className="flex justify-end">
+          <div className="bg-muted p-4 rounded-lg space-y-2 min-w-[300px]">
+            <div className="flex justify-between">
+              <span>품목수</span>
+              <span className="font-medium">{totals.items}개</span>
+            </div>
+            <div className="flex justify-between">
+              <span>총 수량</span>
+              <span className="font-medium">{totals.qty.toLocaleString()}개</span>
+            </div>
+            <div className="flex justify-between">
+              <span>총 박스</span>
+              <span className="font-medium">{totals.cartons.toLocaleString()} CTN</span>
+            </div>
+            <div className="flex justify-between border-t pt-2">
+              <span className="font-medium">총 금액</span>
+              <span className="font-bold text-lg">₩{formatPrice(totals.amount)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 제출 버튼 */}
+      <div className="flex justify-end gap-4 pt-4 border-t">
+        <Button
+          variant="outline"
+          onClick={() => router.push('/orders')}
+          disabled={isSubmitting}
+        >
+          취소
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => handleSubmit(true)}
+          disabled={isSubmitting || orderItems.length === 0}
+        >
+          {isSubmitting ? '저장 중...' : '임시 저장'}
+        </Button>
+        <Button
+          onClick={() => handleSubmit(false)}
+          disabled={isSubmitting || orderItems.length === 0 || !destination}
+        >
+          {isSubmitting ? '제출 중...' : '발주서 제출'}
+        </Button>
+      </div>
+    </div>
+  )
+}

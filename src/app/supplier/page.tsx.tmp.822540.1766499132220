@@ -1,0 +1,221 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { SupplierOrderList } from '@/components/supplier/SupplierOrderList'
+import { InventoryMonitor } from '@/components/supplier/InventoryMonitor'
+import Link from 'next/link'
+
+// 상태별 색상
+const statusColors: Record<string, string> = {
+  DRAFT: 'bg-gray-100 text-gray-800',
+  CONFIRMED: 'bg-blue-100 text-blue-800',
+  PACKING: 'bg-yellow-100 text-yellow-800',
+  SHIPPED: 'bg-purple-100 text-purple-800',
+  COMPLETED: 'bg-green-100 text-green-800',
+  CANCELLED: 'bg-red-100 text-red-800',
+}
+
+const statusLabels: Record<string, string> = {
+  DRAFT: '작성중',
+  CONFIRMED: '확정',
+  PACKING: '패킹중',
+  SHIPPED: '출고완료',
+  COMPLETED: '완료',
+  CANCELLED: '취소',
+}
+
+async function getOrderStats() {
+  const supabase = createAdminClient()
+
+  // 상태별 발주 수
+  const { data: orders } = await supabase
+    .from('ru_orders')
+    .select('status')
+
+  const stats: Record<string, number> = {
+    DRAFT: 0,
+    CONFIRMED: 0,
+    PACKING: 0,
+    SHIPPED: 0,
+    COMPLETED: 0,
+    CANCELLED: 0,
+  }
+
+  orders?.forEach(order => {
+    if (stats[order.status] !== undefined) {
+      stats[order.status]++
+    }
+  })
+
+  return stats
+}
+
+async function getRecentOrders() {
+  const supabase = createAdminClient()
+
+  const { data: orders } = await supabase
+    .from('ru_orders')
+    .select('*')
+    .in('status', ['DRAFT', 'CONFIRMED', 'PACKING'])
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  // 각 발주의 품목 조회
+  if (orders && orders.length > 0) {
+    const orderIds = orders.map(o => o.id)
+    const { data: items } = await supabase
+      .from('ru_order_items')
+      .select('*')
+      .in('order_id', orderIds)
+
+    // 품목을 발주에 연결
+    return orders.map(order => ({
+      ...order,
+      items: items?.filter(item => item.order_id === order.id) || []
+    }))
+  }
+
+  return orders || []
+}
+
+async function getLowStockItems() {
+  const supabase = createAdminClient()
+
+  // 재고 부족 품목 (현재고 < 100)
+  const { data: lowStock } = await supabase
+    .from('cm_erp_products')
+    .select('product_id, name, bal_qty')
+    .lt('bal_qty', 100)
+    .gt('bal_qty', 0)
+    .order('bal_qty', { ascending: true })
+    .limit(10)
+
+  return lowStock || []
+}
+
+async function getExpiringLots() {
+  const supabase = createAdminClient()
+
+  // 유통기한 임박 LOT (3개월 내)
+  const { data: expiring } = await supabase
+    .from('cm_lots_expiring_soon')
+    .select('*')
+    .limit(10)
+
+  return expiring || []
+}
+
+export default async function SupplierDashboard() {
+  const [stats, orders, lowStock, expiringLots] = await Promise.all([
+    getOrderStats(),
+    getRecentOrders(),
+    getLowStockItems(),
+    getExpiringLots(),
+  ])
+
+  const activeOrders = stats.DRAFT + stats.CONFIRMED + stats.PACKING
+
+  return (
+    <div className="container mx-auto py-6 space-y-6">
+      {/* 헤더 */}
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold">에바스 대시보드</h1>
+          <p className="text-muted-foreground">발주 현황 및 재고 모니터링</p>
+        </div>
+        <div className="flex gap-2">
+          <Link
+            href="/inventory"
+            className="px-4 py-2 border rounded-lg hover:bg-muted"
+          >
+            재고 현황
+          </Link>
+          <Link
+            href="/production"
+            className="px-4 py-2 border rounded-lg hover:bg-muted"
+          >
+            생산 일정
+          </Link>
+        </div>
+      </div>
+
+      {/* 상태별 요약 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {Object.entries(stats).map(([status, count]) => (
+          <Card key={status} className={count > 0 ? 'border-2' : ''}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {statusLabels[status]}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold">{count}</span>
+                <span className={`px-2 py-1 rounded text-xs ${statusColors[status]}`}>
+                  {status}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* 주요 알림 */}
+      {(activeOrders > 0 || lowStock.length > 0 || expiringLots.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* 처리 대기 발주 */}
+          <Card className="border-blue-200 bg-blue-50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-blue-800">처리 대기 발주</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <span className="text-3xl font-bold text-blue-600">{activeOrders}</span>
+              <span className="text-blue-600 ml-2">건</span>
+            </CardContent>
+          </Card>
+
+          {/* 재고 부족 품목 */}
+          <Card className="border-orange-200 bg-orange-50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-orange-800">재고 부족 품목</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <span className="text-3xl font-bold text-orange-600">{lowStock.length}</span>
+              <span className="text-orange-600 ml-2">품목</span>
+            </CardContent>
+          </Card>
+
+          {/* 유통기한 임박 */}
+          <Card className="border-red-200 bg-red-50">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm text-red-800">유통기한 임박 (3개월)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <span className="text-3xl font-bold text-red-600">{expiringLots.length}</span>
+              <span className="text-red-600 ml-2">LOT</span>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* 메인 컨텐츠 - 2열 레이아웃 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* 발주 목록 (2/3) */}
+        <div className="lg:col-span-2">
+          <Card>
+            <CardHeader>
+              <CardTitle>진행 중 발주 ({orders.length}건)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <SupplierOrderList orders={orders} />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* 재고/LOT 모니터링 (1/3) */}
+        <div className="space-y-6">
+          <InventoryMonitor lowStock={lowStock} expiringLots={expiringLots} />
+        </div>
+      </div>
+    </div>
+  )
+}

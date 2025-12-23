@@ -1,0 +1,377 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+
+export const dynamic = 'force-dynamic'
+
+// ru_products에 등록된 품목만 조회 (cm_erp_products와 조인 + LOT FIFO 정보)
+async function getInventoryForRuProducts() {
+  const supabase = createAdminClient()
+
+  // 1. ru_products에서 활성 품목 코드 목록 조회
+  const { data: ruProducts } = await supabase
+    .from('ru_products')
+    .select('product_code, name_ko, brand, category')
+    .eq('status', 'active')
+
+  if (!ruProducts || ruProducts.length === 0) {
+    return { inventory: [], productMap: new Map(), lotMap: new Map() }
+  }
+
+  // product_code를 Map으로 변환
+  const productMap = new Map(ruProducts.map(p => [p.product_code, p]))
+  const productCodes = ruProducts.map(p => p.product_code)
+
+  // 2. cm_erp_products에서 해당 품목의 재고만 조회
+  const { data: erpProducts, error } = await supabase
+    .from('cm_erp_products')
+    .select('product_id, name, bal_qty, updated_at')
+    .in('product_id', productCodes)
+    .order('product_id', { ascending: true })
+
+  if (error) {
+    console.error('Error fetching ERP products:', error)
+    return { inventory: [], productMap, lotMap: new Map() }
+  }
+
+  // 3. LOT FIFO 정보 조회
+  const { data: lotFifo } = await supabase
+    .from('cm_product_lot_fifo')
+    .select('*')
+    .in('product_id', productCodes)
+
+  // LOT 정보를 Map으로 변환
+  const lotMap = new Map(
+    (lotFifo || []).map(lot => [lot.product_id, lot])
+  )
+
+  return { inventory: erpProducts || [], productMap, lotMap }
+}
+
+// 유통기한 임박 LOT (ru_products 품목만)
+async function getExpiringLots() {
+  const supabase = createAdminClient()
+
+  // ru_products의 품목 코드 조회
+  const { data: ruProducts } = await supabase
+    .from('ru_products')
+    .select('product_code')
+    .eq('status', 'active')
+
+  if (!ruProducts || ruProducts.length === 0) {
+    return []
+  }
+
+  const productCodes = ruProducts.map(p => p.product_code)
+
+  // cm_lots_expiring_soon 뷰에서 해당 품목만 조회
+  const { data: expiringLots } = await supabase
+    .from('cm_lots_expiring_soon')
+    .select('*')
+    .in('product_id', productCodes)
+    .order('expiry_date', { ascending: true })
+
+  return expiringLots || []
+}
+
+// 재고 부족 품목 (ru_products 중에서만)
+async function getLowStockItems() {
+  const supabase = createAdminClient()
+
+  // ru_products의 품목 코드 조회
+  const { data: ruProducts } = await supabase
+    .from('ru_products')
+    .select('product_code, name_ko, brand')
+    .eq('status', 'active')
+
+  if (!ruProducts || ruProducts.length === 0) {
+    return []
+  }
+
+  const productCodes = ruProducts.map(p => p.product_code)
+  const productMap = new Map(ruProducts.map(p => [p.product_code, p]))
+
+  // cm_erp_products에서 재고 부족 품목
+  const { data: lowStock } = await supabase
+    .from('cm_erp_products')
+    .select('product_id, name, bal_qty')
+    .in('product_id', productCodes)
+    .lt('bal_qty', 100)
+    .gt('bal_qty', 0)
+    .order('bal_qty', { ascending: true })
+
+  return (lowStock || []).map(item => ({
+    ...item,
+    ruProduct: productMap.get(item.product_id)
+  }))
+}
+
+export default async function InventoryPage() {
+  const [{ inventory, productMap }, expiringLots, lowStockItems] = await Promise.all([
+    getInventoryForRuProducts(),
+    getExpiringLots(),
+    getLowStockItems()
+  ])
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleDateString('ko-KR')
+  }
+
+  // 통계 (ru_products 품목만)
+  const totalProducts = inventory.length
+  const totalQuantity = inventory.reduce((sum, item) => sum + (item.bal_qty || 0), 0)
+  const lowStockCount = lowStockItems.length
+  const expiringCount = expiringLots.length
+
+  // 재고 상태별 분류
+  const getStockStatus = (qty: number) => {
+    if (qty <= 0) return { label: '품절', color: 'bg-red-100 text-red-800' }
+    if (qty < 50) return { label: '긴급', color: 'bg-red-100 text-red-800' }
+    if (qty < 100) return { label: '부족', color: 'bg-orange-100 text-orange-800' }
+    if (qty < 500) return { label: '주의', color: 'bg-yellow-100 text-yellow-800' }
+    return { label: '정상', color: 'bg-green-100 text-green-800' }
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">재고 현황</h1>
+        <p className="text-muted-foreground mt-2">
+          러시아 수출용 등록 품목 기준 (ERP 연동 데이터)
+        </p>
+      </div>
+
+      {/* 통계 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{totalProducts}</div>
+            <div className="text-sm text-muted-foreground">등록 품목수</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{totalQuantity.toLocaleString()}</div>
+            <div className="text-sm text-muted-foreground">총 재고량</div>
+          </CardContent>
+        </Card>
+        <Card className={lowStockCount > 0 ? 'border-orange-200 bg-orange-50' : ''}>
+          <CardContent className="pt-4">
+            <div className={`text-2xl font-bold ${lowStockCount > 0 ? 'text-orange-600' : ''}`}>
+              {lowStockCount}
+            </div>
+            <div className="text-sm text-muted-foreground">재고 부족 (100개 미만)</div>
+          </CardContent>
+        </Card>
+        <Card className={expiringCount > 0 ? 'border-red-200 bg-red-50' : ''}>
+          <CardContent className="pt-4">
+            <div className={`text-2xl font-bold ${expiringCount > 0 ? 'text-red-600' : ''}`}>
+              {expiringCount}
+            </div>
+            <div className="text-sm text-muted-foreground">유통기한 임박 (3개월 내)</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 탭 */}
+      <Tabs defaultValue="all" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="all">전체 재고</TabsTrigger>
+          <TabsTrigger value="lowstock" className="relative">
+            재고 부족
+            {lowStockCount > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 px-1.5 text-xs">
+                {lowStockCount}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="expiring" className="relative">
+            유통기한 임박
+            {expiringCount > 0 && (
+              <Badge variant="destructive" className="ml-2 h-5 px-1.5 text-xs">
+                {expiringCount}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* 전체 재고 */}
+        <TabsContent value="all">
+          <Card>
+            <CardHeader>
+              <CardTitle>재고 목록</CardTitle>
+              <CardDescription>
+                ru_products에 등록된 {totalProducts}개 품목의 재고 현황
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-auto max-h-[600px]">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>품목코드</TableHead>
+                      <TableHead>품목명 (RU)</TableHead>
+                      <TableHead>ERP 품명</TableHead>
+                      <TableHead>브랜드</TableHead>
+                      <TableHead className="text-right">재고량</TableHead>
+                      <TableHead>상태</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {inventory.map(item => {
+                      const ruProduct = productMap.get(item.product_id)
+                      const status = getStockStatus(item.bal_qty || 0)
+
+                      return (
+                        <TableRow key={item.product_id}>
+                          <TableCell className="font-mono">{item.product_id}</TableCell>
+                          <TableCell>{ruProduct?.name_ko || '-'}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{item.name}</TableCell>
+                          <TableCell>{ruProduct?.brand || '-'}</TableCell>
+                          <TableCell className="text-right font-medium">
+                            {(item.bal_qty || 0).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={status.color}>{status.label}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                    {inventory.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                          재고 데이터가 없습니다.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 재고 부족 */}
+        <TabsContent value="lowstock">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-orange-700">재고 부족 품목</CardTitle>
+              <CardDescription>
+                재고 100개 미만 품목 (ru_products 등록 품목 기준)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {lowStockItems.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  재고 부족 품목이 없습니다.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>품목코드</TableHead>
+                      <TableHead>품목명</TableHead>
+                      <TableHead>브랜드</TableHead>
+                      <TableHead className="text-right">현재 재고</TableHead>
+                      <TableHead>상태</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {lowStockItems.map(item => {
+                      const status = getStockStatus(item.bal_qty || 0)
+                      return (
+                        <TableRow key={item.product_id}>
+                          <TableCell className="font-mono">{item.product_id}</TableCell>
+                          <TableCell>{item.ruProduct?.name_ko || item.name}</TableCell>
+                          <TableCell>{item.ruProduct?.brand || '-'}</TableCell>
+                          <TableCell className="text-right font-medium text-orange-600">
+                            {(item.bal_qty || 0).toLocaleString()}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={status.color}>{status.label}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 유통기한 임박 */}
+        <TabsContent value="expiring">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-red-700">유통기한 임박 LOT</CardTitle>
+              <CardDescription>
+                3개월 내 유통기한 만료 예정 LOT (ru_products 등록 품목 기준)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {expiringLots.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  유통기한 임박 LOT이 없습니다.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>품목코드</TableHead>
+                      <TableHead>품목명</TableHead>
+                      <TableHead>LOT번호</TableHead>
+                      <TableHead className="text-right">잔여수량</TableHead>
+                      <TableHead>유통기한</TableHead>
+                      <TableHead>D-Day</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {expiringLots.map((lot, index) => {
+                      const daysUntil = lot.expiry_date
+                        ? Math.ceil((new Date(lot.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+                        : null
+
+                      return (
+                        <TableRow key={`${lot.product_id}-${lot.lot_number}-${index}`}>
+                          <TableCell className="font-mono">{lot.product_id}</TableCell>
+                          <TableCell>{lot.product_name || '-'}</TableCell>
+                          <TableCell className="font-mono">{lot.lot_number}</TableCell>
+                          <TableCell className="text-right">
+                            {(lot.remaining_qty || 0).toLocaleString()}
+                          </TableCell>
+                          <TableCell className="text-red-600">
+                            {formatDate(lot.expiry_date)}
+                          </TableCell>
+                          <TableCell>
+                            {daysUntil !== null && (
+                              <Badge
+                                variant={daysUntil <= 30 ? 'destructive' : 'secondary'}
+                              >
+                                D-{daysUntil}
+                              </Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}

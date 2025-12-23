@@ -1,0 +1,172 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import Link from 'next/link'
+
+export const dynamic = 'force-dynamic'
+
+async function getPackingLists() {
+  const supabase = createAdminClient()
+
+  const { data: packingLists, error } = await supabase
+    .from('ru_packing_lists')
+    .select(`
+      *,
+      ru_orders!inner (
+        order_number,
+        buyer_name,
+        status
+      )
+    `)
+    .order('created_date', { ascending: false })
+
+  if (error) {
+    console.error('Error fetching packing lists:', error)
+    return []
+  }
+
+  return packingLists || []
+}
+
+async function getStats() {
+  const supabase = createAdminClient()
+
+  const { data: packingLists } = await supabase
+    .from('ru_packing_lists')
+    .select('total_qty, total_cartons, total_amount')
+
+  const stats = {
+    total: packingLists?.length || 0,
+    totalQty: packingLists?.reduce((sum, pl) => sum + (pl.total_qty || 0), 0) || 0,
+    totalCartons: packingLists?.reduce((sum, pl) => sum + (pl.total_cartons || 0), 0) || 0,
+    totalAmount: packingLists?.reduce((sum, pl) => sum + (pl.total_amount || 0), 0) || 0,
+  }
+
+  return stats
+}
+
+export default async function PackingListsPage() {
+  const [packingLists, stats] = await Promise.all([
+    getPackingLists(),
+    getStats()
+  ])
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat('ko-KR').format(price)
+  }
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleDateString('ko-KR')
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">패킹리스트</h1>
+        <p className="text-muted-foreground mt-2">
+          생성된 패킹리스트 조회
+        </p>
+      </div>
+
+      {/* 통계 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{stats.total}</div>
+            <div className="text-sm text-muted-foreground">총 패킹리스트</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{stats.totalQty.toLocaleString()}</div>
+            <div className="text-sm text-muted-foreground">총 수량</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{stats.totalCartons.toLocaleString()}</div>
+            <div className="text-sm text-muted-foreground">총 박스</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">₩{formatPrice(stats.totalAmount)}</div>
+            <div className="text-sm text-muted-foreground">총 금액</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 패킹리스트 테이블 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>패킹리스트 목록</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {packingLists.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              생성된 패킹리스트가 없습니다.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>PL번호</TableHead>
+                  <TableHead>발주번호</TableHead>
+                  <TableHead>바이어</TableHead>
+                  <TableHead>목적지</TableHead>
+                  <TableHead className="text-right">수량</TableHead>
+                  <TableHead className="text-right">박스</TableHead>
+                  <TableHead className="text-right">금액</TableHead>
+                  <TableHead>생성일</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {packingLists.map(pl => (
+                  <TableRow key={pl.pl_number} className="hover:bg-muted/50">
+                    <TableCell>
+                      <Link
+                        href={`/packing/${pl.pl_number}`}
+                        className="font-mono font-medium hover:underline text-primary"
+                      >
+                        {pl.pl_number}
+                      </Link>
+                    </TableCell>
+                    <TableCell>
+                      <Link
+                        href={`/orders/${pl.order_id}`}
+                        className="font-mono hover:underline"
+                      >
+                        {pl.ru_orders?.order_number || pl.order_id}
+                      </Link>
+                    </TableCell>
+                    <TableCell>{pl.ru_orders?.buyer_name || pl.consignee_name || '-'}</TableCell>
+                    <TableCell>{pl.destination || '-'}</TableCell>
+                    <TableCell className="text-right">
+                      {(pl.total_qty || 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {(pl.total_cartons || 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">
+                      ₩{formatPrice(pl.total_amount || 0)}
+                    </TableCell>
+                    <TableCell>{formatDate(pl.created_date)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

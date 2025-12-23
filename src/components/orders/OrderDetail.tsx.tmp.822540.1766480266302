@@ -1,0 +1,96 @@
+'use client'
+
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { OrderItem } from '@/types'
+
+interface OrderDetailProps {
+  items: OrderItem[]
+}
+
+export function OrderDetail({ items }: OrderDetailProps) {
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat('ko-KR').format(price)
+  }
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[60px]">No</TableHead>
+            <TableHead>품목코드</TableHead>
+            <TableHead>품목명</TableHead>
+            <TableHead className="text-center">수량</TableHead>
+            <TableHead className="text-center">확정수량</TableHead>
+            <TableHead className="text-right">본사가</TableHead>
+            <TableHead className="text-right">커미션</TableHead>
+            <TableHead className="text-right">단가</TableHead>
+            <TableHead className="text-right">금액</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                발주 품목이 없습니다.
+              </TableCell>
+            </TableRow>
+          ) : (
+            items.map((item, index) => {
+              const quantity = item.confirmed_qty ?? item.qty
+              const subtotal = item.subtotal || (quantity * item.unit_price)
+              const isAdjusted = item.confirmed_qty != null && item.confirmed_qty !== item.qty
+
+              return (
+                <TableRow key={item.id}>
+                  <TableCell className="text-center">{index + 1}</TableCell>
+                  <TableCell className="font-mono">{item.product_code}</TableCell>
+                  <TableCell className="max-w-[200px]">
+                    <div className="truncate">{item.product_name || '-'}</div>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {item.qty.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-center">
+                    {item.confirmed_qty != null ? (
+                      <span className={isAdjusted ? 'text-orange-600 font-medium' : ''}>
+                        {item.confirmed_qty.toLocaleString()}
+                        {isAdjusted && (
+                          <span className="text-xs ml-1">
+                            ({item.confirmed_qty > item.qty ? '+' : ''}
+                            {item.confirmed_qty - item.qty})
+                          </span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    ₩{formatPrice(item.supply_price || 0)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    ₩{formatPrice(item.commission || 0)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    ₩{formatPrice(item.unit_price)}
+                  </TableCell>
+                  <TableCell className="text-right font-medium">
+                    ₩{formatPrice(subtotal)}
+                  </TableCell>
+                </TableRow>
+              )
+            })
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}

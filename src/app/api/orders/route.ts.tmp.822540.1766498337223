@@ -1,0 +1,235 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { createAdminClient } from '@/lib/supabase/admin'
+
+// 발주 품목 입력 타입
+interface OrderItemInput {
+  product_code: string
+  product_name?: string
+  destination?: string           // 품목별 목적지
+  pcs_per_ctn?: number           // 입수량
+  qty: number                    // requested_qty
+  supply_price: number
+  commission: number
+  unit_price: number
+}
+
+// 발주 생성 입력 타입
+interface CreateOrderInput {
+  buyer_id?: string
+  buyer_name?: string
+  order_date?: string
+  destination?: string
+  status?: 'DRAFT' | 'CONFIRMED'
+  items: OrderItemInput[]
+  remarks?: string
+  region_code?: string  // 발주번호 생성용
+}
+
+// 월별 발주 ID 생성 (순차 번호 포함)
+async function generateOrderId(
+  supabase: ReturnType<typeof createAdminClient>,
+  regionCode: string = 'RU'
+): Promise<string> {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const baseId = `${regionCode}-${year}-${month}`
+
+  // 같은 월에 기존 발주가 있는지 확인
+  const { data: existing } = await supabase
+    .from('ru_orders')
+    .select('id')
+    .like('id', `${baseId}%`)
+    .order('id', { ascending: false })
+    .limit(1)
+
+  if (!existing || existing.length === 0) {
+    return baseId  // 첫 발주: RU-2025-01
+  }
+
+  // 순차 번호 추가: RU-2025-01-A, RU-2025-01-B, ...
+  const lastId = existing[0].id as string
+  if (lastId === baseId) {
+    return `${baseId}-A`
+  }
+
+  const parts = lastId.split('-')
+  const suffix = parts[parts.length - 1]
+
+  // suffix가 한 글자 알파벳인 경우
+  if (suffix.length === 1 && /^[A-Z]$/.test(suffix)) {
+    const nextSuffix = String.fromCharCode(suffix.charCodeAt(0) + 1)
+    return `${baseId}-${nextSuffix}`
+  }
+
+  // 그 외 (baseId와 같은 형식이면 -A 추가)
+  return `${baseId}-A`
+}
+
+// POST: 발주 생성
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as CreateOrderInput
+    const {
+      buyer_id,
+      buyer_name,
+      order_date,
+      destination,
+      status = 'DRAFT',
+      items,
+      remarks,
+      region_code = 'KZ'
+    } = body
+
+    // 검증
+    if (!items || items.length === 0) {
+      return NextResponse.json(
+        { error: '최소 1개 이상의 제품이 필요합니다.' },
+        { status: 400 }
+      )
+    }
+
+    const supabase = createAdminClient()
+
+    // 발주번호 생성
+    const { data: orderNumber, error: seqError } = await supabase
+      .rpc('ru_generate_order_number', { p_region_code: region_code })
+
+    if (seqError) {
+      console.error('Order number generation error:', seqError)
+      return NextResponse.json(
+        { error: '발주번호 생성 실패' },
+        { status: 500 }
+      )
+    }
+
+    // 합계 계산
+    const total_qty = items.reduce((sum, item) => sum + item.qty, 0)
+    const total_amount = items.reduce((sum, item) => sum + (item.unit_price * item.qty), 0)
+
+    // 발주서 생성
+    const { data: order, error: orderError } = await supabase
+      .from('ru_orders')
+      .insert({
+        order_number: orderNumber,
+        buyer_id: buyer_id || null,
+        buyer_name: buyer_name || null,
+        order_date: order_date || new Date().toISOString().split('T')[0],
+        destination: destination || null,
+        status,
+        total_qty,
+        total_cartons: 0,
+        total_amount,
+        remarks: remarks || null,
+        history: [{ date: new Date().toISOString(), action: 'created', by: buyer_name || 'system' }]
+      })
+      .select()
+      .single()
+
+    if (orderError || !order) {
+      console.error('Order creation error:', orderError)
+      return NextResponse.json(
+        { error: '발주서 생성 실패' },
+        { status: 500 }
+      )
+    }
+
+    // 발주 품목 추가
+    const orderItems = items.map(item => ({
+      order_id: order.id,
+      product_code: item.product_code,
+      product_name: item.product_name || null,
+      qty: item.qty,
+      supply_price: item.supply_price,
+      commission: item.commission,
+      unit_price: item.unit_price,
+      subtotal: item.unit_price * item.qty
+    }))
+
+    const { error: itemsError } = await supabase
+      .from('ru_order_items')
+      .insert(orderItems)
+
+    if (itemsError) {
+      console.error('Order items error:', itemsError)
+      // 롤백: 발주서 삭제
+      await supabase.from('ru_orders').delete().eq('id', order.id)
+      return NextResponse.json(
+        { error: '발주 품목 추가 실패: ' + itemsError.message },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        id: order.id,
+        order_number: orderNumber,
+        status: order.status,
+        total_qty,
+        total_amount,
+        items_count: items.length
+      }
+    }, { status: 201 })
+
+  } catch (error) {
+    console.error('Order API error:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : '발주서 처리 중 오류 발생' },
+      { status: 500 }
+    )
+  }
+}
+
+// GET: 발주 목록 조회
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const buyerId = searchParams.get('buyer_id')
+    const status = searchParams.get('status')
+    const destination = searchParams.get('destination')
+    const limit = parseInt(searchParams.get('limit') || '100')
+
+    const supabase = createAdminClient()
+
+    let query = supabase
+      .from('ru_orders')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (buyerId) {
+      query = query.eq('buyer_id', buyerId)
+    }
+
+    if (status) {
+      query = query.eq('status', status)
+    }
+
+    if (destination) {
+      query = query.ilike('destination', `%${destination}%`)
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Orders fetch error:', error)
+      return NextResponse.json(
+        { error: '발주 목록 조회 실패' },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({
+      success: true,
+      orders: data || []
+    })
+
+  } catch (error) {
+    console.error('Orders API error:', error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : '발주 목록 처리 중 오류 발생' },
+      { status: 500 }
+    )
+  }
+}

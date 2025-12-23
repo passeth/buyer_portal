@@ -1,0 +1,178 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+
+export const dynamic = 'force-dynamic'
+
+async function getInventory() {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
+    .from('ru_inventory')
+    .select('*')
+    .order('product_code', { ascending: true })
+
+  if (error) {
+    console.error('Error fetching inventory:', error)
+    return []
+  }
+
+  return data || []
+}
+
+async function getProducts() {
+  const supabase = createAdminClient()
+
+  const { data } = await supabase
+    .from('ru_products')
+    .select('product_code, name_ko, brand')
+    .eq('status', 'active')
+
+  return new Map((data || []).map(p => [p.product_code, p]))
+}
+
+export default async function InventoryPage() {
+  const [inventory, productMap] = await Promise.all([
+    getInventory(),
+    getProducts()
+  ])
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleDateString('ko-KR')
+  }
+
+  const isExpiringSoon = (expiryDate: string | null) => {
+    if (!expiryDate) return false
+    const expiry = new Date(expiryDate)
+    const threeMonthsLater = new Date()
+    threeMonthsLater.setMonth(threeMonthsLater.getMonth() + 3)
+    return expiry <= threeMonthsLater
+  }
+
+  // 통계
+  const totalProducts = inventory.length
+  const totalQuantity = inventory.reduce((sum, item) => sum + (item.quantity || 0), 0)
+  const lowStockCount = inventory.filter(item => (item.quantity || 0) < 100).length
+  const expiringCount = inventory.filter(item => isExpiringSoon(item.expiry_date)).length
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="mb-6">
+        <h1 className="text-3xl font-bold">재고 현황</h1>
+        <p className="text-muted-foreground mt-2">
+          ERP 연동 데이터 (읽기 전용)
+        </p>
+      </div>
+
+      {/* 통계 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{totalProducts}</div>
+            <div className="text-sm text-muted-foreground">품목수</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{totalQuantity.toLocaleString()}</div>
+            <div className="text-sm text-muted-foreground">총 재고량</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold text-orange-600">{lowStockCount}</div>
+            <div className="text-sm text-muted-foreground">재고 부족 (100개 미만)</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold text-red-600">{expiringCount}</div>
+            <div className="text-sm text-muted-foreground">유통기한 임박 (3개월 내)</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 재고 테이블 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>재고 목록</CardTitle>
+          <CardDescription>
+            마지막 업데이트: {inventory[0]?.updated_at ? formatDate(inventory[0].updated_at) : '-'}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>품목코드</TableHead>
+                <TableHead>제품명</TableHead>
+                <TableHead>브랜드</TableHead>
+                <TableHead className="text-right">재고량</TableHead>
+                <TableHead>유통기한</TableHead>
+                <TableHead>보관위치</TableHead>
+                <TableHead>상태</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {inventory.map(item => {
+                const product = productMap.get(item.product_code)
+                const expiring = isExpiringSoon(item.expiry_date)
+                const lowStock = (item.quantity || 0) < 100
+
+                return (
+                  <TableRow key={item.id}>
+                    <TableCell className="font-mono">{item.product_code}</TableCell>
+                    <TableCell>{product?.name_ko || '-'}</TableCell>
+                    <TableCell>{product?.brand || '-'}</TableCell>
+                    <TableCell className="text-right font-medium">
+                      {(item.quantity || 0).toLocaleString()}
+                    </TableCell>
+                    <TableCell>
+                      <span className={expiring ? 'text-red-600' : ''}>
+                        {formatDate(item.expiry_date)}
+                      </span>
+                    </TableCell>
+                    <TableCell>{item.location || '-'}</TableCell>
+                    <TableCell>
+                      {lowStock && (
+                        <Badge variant="outline" className="bg-orange-50 text-orange-700 mr-1">
+                          재고부족
+                        </Badge>
+                      )}
+                      {expiring && (
+                        <Badge variant="outline" className="bg-red-50 text-red-700">
+                          유통기한임박
+                        </Badge>
+                      )}
+                      {!lowStock && !expiring && (
+                        <Badge variant="outline" className="bg-green-50 text-green-700">
+                          정상
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+              {inventory.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    재고 데이터가 없습니다.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

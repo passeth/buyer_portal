@@ -1,0 +1,227 @@
+import { notFound } from 'next/navigation'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+
+export const dynamic = 'force-dynamic'
+
+async function getOrder(id: string) {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
+    .from('ru_orders')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (error) {
+    console.error('Error fetching order:', error)
+    return null
+  }
+
+  return data
+}
+
+async function getOrderItems(orderId: string) {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
+    .from('ru_order_items')
+    .select('*')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    console.error('Error fetching order items:', error)
+    return []
+  }
+
+  return data || []
+}
+
+const statusLabels: Record<string, { label: string; color: string }> = {
+  DRAFT: { label: '작성 중', color: 'bg-gray-100 text-gray-700' },
+  CONFIRMED: { label: '확정', color: 'bg-green-100 text-green-700' },
+  PACKING: { label: '패킹 중', color: 'bg-purple-100 text-purple-700' },
+  SHIPPED: { label: '출하', color: 'bg-cyan-100 text-cyan-700' },
+  COMPLETED: { label: '완료', color: 'bg-emerald-100 text-emerald-700' },
+  CANCELLED: { label: '취소', color: 'bg-red-100 text-red-700' },
+}
+
+export default async function OrderDetailPage({
+  params
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+  const [order, items] = await Promise.all([
+    getOrder(id),
+    getOrderItems(id)
+  ])
+
+  if (!order) {
+    notFound()
+  }
+
+  const status = statusLabels[order.status] || { label: order.status, color: 'bg-gray-100' }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('ko-KR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    })
+  }
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('ko-KR').format(amount)
+  }
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      {/* 헤더 */}
+      <div className="flex justify-between items-start mb-6">
+        <div>
+          <div className="flex items-center gap-4 mb-2">
+            <h1 className="text-3xl font-bold font-mono">{order.order_number}</h1>
+            <Badge className={status.color}>{status.label}</Badge>
+          </div>
+          <p className="text-muted-foreground">
+            {order.destination || '-'} | 발주일: {formatDate(order.order_date)}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Link href="/orders">
+            <Button variant="outline">목록으로</Button>
+          </Link>
+          {order.status === 'DRAFT' && (
+            <Link href={`/orders/${id}/edit`}>
+              <Button>수정</Button>
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {/* 요약 카드 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">{items.length}</div>
+            <div className="text-sm text-muted-foreground">품목수</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">
+              {order.total_qty?.toLocaleString() || 0}
+            </div>
+            <div className="text-sm text-muted-foreground">총 수량</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold">
+              {order.total_cartons?.toLocaleString() || 0}
+            </div>
+            <div className="text-sm text-muted-foreground">총 박스</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-2xl font-bold text-primary">
+              ₩{formatCurrency(order.total_amount || 0)}
+            </div>
+            <div className="text-sm text-muted-foreground">총 금액</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 발주 품목 */}
+      <Card>
+        <CardHeader>
+          <CardTitle>발주 품목</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>품목코드</TableHead>
+                <TableHead>품목명</TableHead>
+                <TableHead className="text-center">수량</TableHead>
+                <TableHead className="text-right">본사가</TableHead>
+                <TableHead className="text-right">커미션</TableHead>
+                <TableHead className="text-right">단가</TableHead>
+                <TableHead className="text-right">금액</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map(item => (
+                <TableRow key={item.id}>
+                  <TableCell className="font-mono">{item.product_code}</TableCell>
+                  <TableCell>{item.product_name || '-'}</TableCell>
+                  <TableCell className="text-center">{item.qty?.toLocaleString()}</TableCell>
+                  <TableCell className="text-right">₩{formatCurrency(item.supply_price || 0)}</TableCell>
+                  <TableCell className="text-right">₩{formatCurrency(item.commission || 0)}</TableCell>
+                  <TableCell className="text-right">₩{formatCurrency(item.unit_price || 0)}</TableCell>
+                  <TableCell className="text-right font-medium">₩{formatCurrency(item.subtotal || 0)}</TableCell>
+                </TableRow>
+              ))}
+              {items.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    발주 품목이 없습니다.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* 비고 */}
+      {order.remarks && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>비고</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div>{order.remarks}</div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 변경 이력 */}
+      {order.history && order.history.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle>변경 이력</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {order.history.map((h: { date: string; action: string; by: string; changes?: string }, idx: number) => (
+                <div key={idx} className="flex gap-4 text-sm">
+                  <span className="text-muted-foreground w-40">
+                    {new Date(h.date).toLocaleString('ko-KR')}
+                  </span>
+                  <span className="font-medium">{h.action}</span>
+                  <span className="text-muted-foreground">by {h.by}</span>
+                  {h.changes && <span className="text-muted-foreground">({h.changes})</span>}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}

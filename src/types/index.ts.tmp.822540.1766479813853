@@ -1,0 +1,217 @@
+// =============================================
+// RUboard 간소화 스키마 타입 정의
+// =============================================
+
+// 사용자
+export interface User {
+  id: string
+  email: string
+  name: string
+  role: 'buyer' | 'manager' | 'supplier' | 'admin'
+  org_name?: string
+  region_code?: string
+  phone?: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// 제품 마스터
+export interface Product {
+  id: string
+  product_code: string
+  name_ko: string
+  name_en?: string
+  name_ru?: string
+  barcode?: string
+  brand?: string
+  category?: string
+  volume?: string
+  pcs_per_carton: number
+  width_cm?: number
+  height_cm?: number
+  depth_cm?: number
+  cbm?: number
+  weight_kg?: number
+  hscode?: string              // HS코드 추가
+  status: 'active' | 'inactive'
+  remarks?: string
+  created_at: string
+  updated_at: string
+  // 조인 데이터
+  price?: Price
+  inventory?: Inventory
+}
+
+// 가격
+export interface Price {
+  id: string
+  product_code: string
+  supply_price: number    // 본사 공급가 (base_price → supply_price)
+  commission: number      // 커미션
+  final_price: number     // 최종 공급가
+  effective_date: string
+  created_at: string
+}
+
+// 재고
+export interface Inventory {
+  id: string
+  product_code: string
+  quantity: number
+  expiry_date?: string
+  location?: string
+  updated_at: string
+  updated_by?: string
+}
+
+// 생산 일정
+export interface Production {
+  id: string
+  product_code: string
+  planned_date: string
+  planned_qty: number
+  status: 'scheduled' | 'in_progress' | 'completed' | 'cancelled'
+  remarks?: string
+  created_at: string
+  updated_at: string
+}
+
+// 발주 상태
+export type OrderStatus = 'DRAFT' | 'CONFIRMED' | 'PACKING' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED'
+
+// 발주 이력 항목
+export interface OrderHistoryItem {
+  date: string
+  action: string
+  by: string
+  changes?: string
+}
+
+// 발주서
+export interface Order {
+  id: string
+  order_number: string
+  buyer_id?: string
+  buyer_name?: string
+  order_date: string
+  destination?: string         // 목적지 추가
+  desired_delivery?: string    // 배송 희망 (레거시 호환)
+  status: OrderStatus
+  total_qty: number
+  total_cartons: number
+  total_amount: number
+  remarks?: string
+  history: OrderHistoryItem[]
+  created_at: string
+  updated_at: string
+  completed_at?: string
+  // 조인 데이터
+  buyer?: User
+  items?: OrderItem[]
+}
+
+// 발주 품목
+export interface OrderItem {
+  id: string
+  order_id: string
+  product_code: string
+  product_name?: string
+  requested_qty: number
+  confirmed_qty?: number
+  unit_price: number
+  subtotal: number
+  remarks?: string
+  created_at: string
+  // 조인 데이터
+  product?: Product
+}
+
+// 패킹리스트
+export interface PackingList {
+  id: string
+  order_id: string
+  pl_number: string
+  invoice_number?: string
+  invoice_date?: string
+  created_date: string
+  // Exporter
+  exporter_name?: string
+  exporter_address?: string
+  exporter_tel?: string
+  exporter_fax?: string
+  // Consignee
+  consignee_name?: string
+  consignee_address?: string
+  consignee_tel?: string
+  consignee_email?: string
+  // Shipping
+  manufacturer?: string
+  shipping_port?: string
+  departure_date?: string
+  destination?: string
+  vessel_flight?: string
+  payment_term?: string
+  // Summary
+  main_item?: string
+  hs_code?: string
+  commodity_desc?: string
+  total_qty: number
+  total_cartons: number
+  total_nw_kg: number
+  total_gw_kg: number
+  total_cbm: number
+  total_pallets: number
+  total_amount: number
+  created_at: string
+  // 조인 데이터
+  order?: Order
+  items?: PackingItem[]
+  invoices?: Invoice[]
+}
+
+// 패킹 상세
+export interface PackingItem {
+  id: string
+  packing_list_id: string
+  product_code: string
+  product_name?: string
+  qty: number
+  cartons: number
+  nw_kg: number
+  gw_kg: number
+  cbm: number
+  pallets: number
+  created_at: string
+}
+
+// 인보이스 상세
+export interface Invoice {
+  id: string
+  packing_list_id: string
+  product_code: string
+  product_name?: string
+  qty: number
+  unit_price: number
+  amount: number
+  created_at: string
+}
+
+// =============================================
+// 엑셀 임포트용 타입
+// =============================================
+export interface ExcelProductRow {
+  no?: number
+  product_code?: string
+  brand?: string
+  category?: string
+  name_ko?: string
+  name_en?: string
+  name_ru?: string
+  barcode?: string
+  volume?: string
+  pcs_per_carton?: number
+  base_price_krw?: number
+  commission?: number
+  remarks?: string
+}

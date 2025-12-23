@@ -1,0 +1,325 @@
+'use client'
+
+import { useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { useToast } from '@/hooks/use-toast'
+import type { Brand, Category, ExcelProductRow } from '@/types'
+import * as XLSX from 'xlsx'
+
+interface ExcelImporterProps {
+  brands: Brand[]
+  categories: Category[]
+}
+
+interface ParsedProduct extends ExcelProductRow {
+  isValid: boolean
+  errors: string[]
+  brandId?: string
+  categoryId?: string
+}
+
+export function ExcelImporter({ brands, categories }: ExcelImporterProps) {
+  const [file, setFile] = useState<File | null>(null)
+  const [parsedData, setParsedData] = useState<ParsedProduct[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const { toast } = useToast()
+  const router = useRouter()
+
+  const findBrand = useCallback((brandName: string) => {
+    if (!brandName) return undefined
+    const normalized = brandName.trim().toUpperCase()
+    return brands.find(b =>
+      b.name_ko.toUpperCase() === normalized ||
+      b.name_en?.toUpperCase() === normalized ||
+      b.brand_code.toUpperCase() === normalized
+    )
+  }, [brands])
+
+  const findCategory = useCallback((categoryName: string) => {
+    if (!categoryName) return undefined
+    const normalized = categoryName.trim()
+    return categories.find(c =>
+      c.name_ko === normalized ||
+      c.name_en === normalized ||
+      c.category_code === normalized
+    )
+  }, [categories])
+
+  const parseExcel = useCallback(async (file: File) => {
+    setIsLoading(true)
+    try {
+      const data = await file.arrayBuffer()
+      const workbook = XLSX.read(data)
+      const sheetName = workbook.SheetNames[0]
+      const worksheet = workbook.Sheets[sheetName]
+      const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet)
+
+      // 컬럼명 정규화 (줄바꿈, 공백 제거)
+      const normalizeHeader = (header: string): string => {
+        return header.replace(/[\r\n\s]+/g, ' ').trim()
+      }
+
+      // 컬럼 매핑 (다양한 컬럼명 지원)
+      const columnMap: Record<string, string[]> = {
+        product_code: ['품목코드', '제품코드', 'product_code', 'code', 'sku'],
+        brand: ['브랜드', 'brand', 'brand_name'],
+        category: ['카테고리', 'category', '품목'],
+        name_ko: ['품목명 KOR', '제품명 KOR', '품목명', '제품명', 'name_ko', '한글명'],
+        name_en: ['영문 품목명 ENG', '영문 제품명 ENG', 'name_en', '영문명'],
+        name_ru: ['러시아어 품목명 RUS', '러시아 제품명 RUS', 'name_ru', '러시아명'],
+        barcode: ['바코드', 'barcode', 'Barcode', 'ean', '바코드(Barcode)'],
+        pcs_per_carton: ['pcs / 1 CTN', 'pcs_per_carton', '입수량', 'carton_qty'],
+        base_price_krw: ['본사공급단가(원화)', '본사공급단가', '본사 공급 단가 (영세율)', 'base_price_krw', '단가'],
+        base_price_usd: ['본사공급단가(미화)', 'base_price_usd', 'usd'],
+        remarks: ['리마크', 'remarks', '비고'],
+      }
+
+      const getColumnValue = (row: Record<string, unknown>, key: string): unknown => {
+        const possibleNames = columnMap[key] || [key]
+        // 먼저 정규화된 키로 직접 매칭 시도
+        for (const name of possibleNames) {
+          if (row[name] !== undefined && row[name] !== null && row[name] !== '') {
+            return row[name]
+          }
+        }
+        // 정규화된 컬럼명으로 매칭 시도
+        for (const [colName, value] of Object.entries(row)) {
+          const normalizedCol = normalizeHeader(colName)
+          for (const name of possibleNames) {
+            if (normalizedCol === name || normalizedCol.includes(name)) {
+              if (value !== undefined && value !== null && value !== '') {
+                return value
+              }
+            }
+          }
+        }
+        return undefined
+      }
+
+      const parsed: ParsedProduct[] = jsonData.map((row, index) => {
+        const errors: string[] = []
+
+        const product_code = String(getColumnValue(row, 'product_code') || '').trim()
+        const brandName = String(getColumnValue(row, 'brand') || '').trim()
+        const categoryName = String(getColumnValue(row, 'category') || '').trim()
+        const name_ko = String(getColumnValue(row, 'name_ko') || '').trim()
+        const barcode = String(getColumnValue(row, 'barcode') || '').trim()
+        const name_en = String(getColumnValue(row, 'name_en') || '').trim()
+        const name_ru = String(getColumnValue(row, 'name_ru') || '').trim()
+        const pcs_per_carton = Number(getColumnValue(row, 'pcs_per_carton')) || 1
+        const base_price_krw = Number(getColumnValue(row, 'base_price_krw')) || 0
+        const base_price_usd = Number(getColumnValue(row, 'base_price_usd')) || undefined
+        const remarks = String(getColumnValue(row, 'remarks') || '').trim()
+
+        // 검증
+        if (!product_code) errors.push('품목코드 필수')
+        if (!name_ko) errors.push('품목명 필수')
+
+        const brand = findBrand(brandName)
+        const category = findCategory(categoryName)
+
+        if (brandName && !brand) errors.push(`브랜드 '${brandName}' 없음`)
+        if (categoryName && !category) errors.push(`카테고리 '${categoryName}' 없음`)
+
+        return {
+          no: index + 1,
+          product_code,
+          brand: brandName,
+          category: categoryName,
+          name_ko,
+          barcode: barcode || undefined,
+          name_en: name_en || undefined,
+          name_ru: name_ru || undefined,
+          pcs_per_carton,
+          base_price_krw,
+          base_price_usd,
+          remarks: remarks || undefined,
+          isValid: errors.length === 0,
+          errors,
+          brandId: brand?.id,
+          categoryId: category?.id,
+        }
+      }).filter(p => p.product_code) // 빈 행 제거
+
+      setParsedData(parsed)
+
+      const validCount = parsed.filter(p => p.isValid).length
+      toast({
+        title: '파싱 완료',
+        description: `${parsed.length}개 중 ${validCount}개 유효`,
+      })
+    } catch (error) {
+      console.error('Excel parse error:', error)
+      toast({
+        title: '파싱 실패',
+        description: '엑셀 파일을 읽는 중 오류가 발생했습니다.',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }, [findBrand, findCategory, toast])
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0]
+    if (selectedFile) {
+      setFile(selectedFile)
+      parseExcel(selectedFile)
+    }
+  }
+
+  const handleImport = async () => {
+    const validProducts = parsedData.filter(p => p.isValid)
+    if (validProducts.length === 0) {
+      toast({
+        title: '임포트 실패',
+        description: '유효한 제품이 없습니다.',
+        variant: 'destructive'
+      })
+      return
+    }
+
+    setIsImporting(true)
+    try {
+      const response = await fetch('/api/products/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products: validProducts })
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || '임포트 실패')
+      }
+
+      toast({
+        title: '임포트 완료',
+        description: `${result.inserted}개 추가, ${result.updated}개 업데이트`,
+      })
+
+      // 페이지 새로고침
+      router.refresh()
+      setParsedData([])
+      setFile(null)
+    } catch (error) {
+      console.error('Import error:', error)
+      toast({
+        title: '임포트 실패',
+        description: error instanceof Error ? error.message : '알 수 없는 오류',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  const validCount = parsedData.filter(p => p.isValid).length
+  const invalidCount = parsedData.filter(p => !p.isValid).length
+
+  return (
+    <div className="space-y-6">
+      {/* 파일 선택 */}
+      <div className="flex items-center gap-4">
+        <Input
+          type="file"
+          accept=".xlsx,.xls"
+          onChange={handleFileChange}
+          disabled={isLoading}
+          className="max-w-sm"
+        />
+        {file && (
+          <span className="text-sm text-muted-foreground">
+            {file.name}
+          </span>
+        )}
+      </div>
+
+      {/* 안내 */}
+      <div className="text-sm text-muted-foreground bg-muted p-4 rounded-lg">
+        <p className="font-medium mb-2">지원하는 컬럼명:</p>
+        <ul className="list-disc list-inside space-y-1">
+          <li><strong>품목코드</strong> (필수): 품목코드, product_code, code, sku</li>
+          <li><strong>품목명</strong> (필수): 품목명 KOR, 품목명, name_ko</li>
+          <li><strong>브랜드</strong>: 브랜드, brand (등록된 브랜드명과 매칭)</li>
+          <li><strong>바코드</strong>: 바코드, barcode, ean</li>
+          <li><strong>입수량</strong>: pcs / 1 CTN, pcs_per_carton, 입수량</li>
+          <li><strong>단가</strong>: 본사공급단가(원화), base_price_krw, 단가</li>
+        </ul>
+      </div>
+
+      {/* 파싱 결과 */}
+      {parsedData.length > 0 && (
+        <>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Badge variant="default">{validCount}개 유효</Badge>
+              {invalidCount > 0 && (
+                <Badge variant="destructive">{invalidCount}개 오류</Badge>
+              )}
+            </div>
+            <Button
+              onClick={handleImport}
+              disabled={validCount === 0 || isImporting}
+            >
+              {isImporting ? '임포트 중...' : `${validCount}개 제품 임포트`}
+            </Button>
+          </div>
+
+          <div className="border rounded-lg max-h-[400px] overflow-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[60px]">No</TableHead>
+                  <TableHead>상태</TableHead>
+                  <TableHead>품목코드</TableHead>
+                  <TableHead>브랜드</TableHead>
+                  <TableHead>품목명</TableHead>
+                  <TableHead>바코드</TableHead>
+                  <TableHead className="text-center">입수량</TableHead>
+                  <TableHead className="text-right">단가</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {parsedData.map((product, index) => (
+                  <TableRow key={index} className={!product.isValid ? 'bg-red-50' : ''}>
+                    <TableCell>{product.no}</TableCell>
+                    <TableCell>
+                      {product.isValid ? (
+                        <Badge variant="outline">OK</Badge>
+                      ) : (
+                        <Badge variant="destructive" title={product.errors.join(', ')}>
+                          오류
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono">{product.product_code}</TableCell>
+                    <TableCell>{product.brand || '-'}</TableCell>
+                    <TableCell className="max-w-[200px] truncate">{product.name_ko}</TableCell>
+                    <TableCell className="font-mono text-sm">{product.barcode || '-'}</TableCell>
+                    <TableCell className="text-center">{product.pcs_per_carton}</TableCell>
+                    <TableCell className="text-right">
+                      {product.base_price_krw?.toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

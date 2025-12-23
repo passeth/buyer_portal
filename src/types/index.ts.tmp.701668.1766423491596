@@ -1,0 +1,159 @@
+// RUboard 타입 정의
+
+export interface Organization {
+  id: string
+  org_code: string
+  org_type: 'buyer' | 'manager' | 'supplier'
+  name_ko: string
+  name_en?: string
+  name_ru?: string
+  region?: string
+  region_code?: string
+  is_active: boolean
+}
+
+export interface Brand {
+  id: string
+  brand_code: string
+  name_ko: string
+  name_en?: string
+  name_ru?: string
+  display_order: number
+  is_active: boolean
+}
+
+export interface Category {
+  id: string
+  category_code: string
+  name_ko: string
+  name_en?: string
+  name_ru?: string
+  parent_id?: string
+  level: number
+  path?: string
+  display_order: number
+  is_active: boolean
+}
+
+export interface Product {
+  id: string
+  product_code: string
+  barcode?: string
+  name_ko: string
+  name_en?: string
+  name_ru?: string
+  brand_id?: string
+  category_id?: string
+  volume?: string
+  pcs_per_carton: number
+  base_price_krw: number
+  base_price_usd?: number
+  is_exclusive: boolean
+  moq: number
+  status: string
+  remarks?: string
+  created_at: string
+  updated_at: string
+  // 조인된 데이터
+  brand?: Brand
+  category?: Category
+}
+
+export interface ProductCommission {
+  id: string
+  product_id: string
+  commission_type: 'rate' | 'fixed'
+  commission_rate?: number
+  commission_fixed_krw?: number
+  effective_from: string
+  effective_to?: string
+}
+
+export interface Order {
+  id: string
+  order_number: string
+  buyer_org_id: string
+  order_date: string
+  status: OrderStatus
+  edit_permission_buyer: boolean
+  edit_permission_manager: boolean
+  total_base_amount: number
+  total_commission: number
+  total_final_amount: number
+  total_quantity: number
+  total_cartons: number
+  buyer_remarks?: string
+  manager_remarks?: string
+  supplier_remarks?: string
+  created_at: string
+  updated_at: string
+  // 조인된 데이터
+  buyer_org?: Organization
+}
+
+export type OrderStatus =
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'REVIEWING'
+  | 'STOCK_CHECK'
+  | 'ADJUSTING'
+  | 'CONFIRMED'
+  | 'PACKING'
+  | 'PACKED'
+  | 'SHIPPED'
+  | 'DELIVERED'
+  | 'COMPLETED'
+  | 'CANCELLED'
+
+export interface OrderItem {
+  id: string
+  order_id: string
+  product_id: string
+  requested_quantity: number
+  confirmed_quantity?: number
+  shipped_quantity?: number
+  carton_count?: number
+  base_price: number
+  commission: number
+  final_price: number
+  subtotal_base?: number
+  subtotal_commission?: number
+  subtotal_final?: number
+  expiry_status: string
+  expiry_note?: string
+  remarks?: string
+  // 조인된 데이터
+  product?: Product
+}
+
+export interface InventoryLot {
+  id: string
+  product_id: string
+  lot_number: string
+  initial_quantity: number
+  current_quantity: number
+  reserved_quantity: number
+  shipped_quantity: number
+  manufactured_date?: string
+  expiry_date: string
+  received_date: string
+  status: string
+  location?: string
+}
+
+// 엑셀 임포트 타입
+export interface ExcelProductRow {
+  no?: number
+  product_code?: string
+  brand?: string
+  category?: string
+  name_ko?: string
+  barcode?: string
+  name_en?: string
+  name_ru?: string
+  pcs_per_carton?: number
+  base_price_krw?: number
+  base_price_usd?: number
+  commission_rate?: number
+  remarks?: string
+}

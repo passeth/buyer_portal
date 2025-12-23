@@ -1,0 +1,7 @@
+import { redirect } from 'next/navigation'
+
+export default function Home() {
+  // 인증 체크 후 적절한 대시보드로 리다이렉트
+  // TODO: 인증 구현 후 로직 추가
+  redirect('/login')
+}

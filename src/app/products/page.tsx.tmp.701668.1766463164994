@@ -1,0 +1,86 @@
+import { createAdminClient } from '@/lib/supabase/admin'
+import { ProductsTable } from '@/components/products/ProductsTable'
+import { ExcelImporter } from '@/components/products/ExcelImporter'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
+export const dynamic = 'force-dynamic'
+
+async function getProducts() {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
+    .from('ru_products')
+    .select('*')
+    .eq('status', 'active')
+    .order('product_code', { ascending: true })
+
+  if (error) {
+    console.error('Error fetching products:', error)
+    return []
+  }
+
+  return data || []
+}
+
+// 브랜드 목록 추출 (제품 테이블에서 DISTINCT)
+async function getBrands() {
+  const supabase = createAdminClient()
+
+  const { data } = await supabase
+    .from('ru_products')
+    .select('brand')
+    .not('brand', 'is', null)
+    .order('brand', { ascending: true })
+
+  // 중복 제거
+  const uniqueBrands = [...new Set(data?.map(d => d.brand).filter(Boolean))]
+  return uniqueBrands
+}
+
+export default async function ProductsPage() {
+  const [products, brands] = await Promise.all([
+    getProducts(),
+    getBrands()
+  ])
+
+  return (
+    <div className="container mx-auto py-8 px-4">
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-3xl font-bold">제품 마스터</h1>
+        <div className="text-sm text-muted-foreground">
+          총 {products.length}개 제품
+        </div>
+      </div>
+
+      <Tabs defaultValue="list" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="list">제품 목록</TabsTrigger>
+          <TabsTrigger value="import">엑셀 임포트</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="list">
+          <Card>
+            <CardHeader>
+              <CardTitle>제품 목록</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ProductsTable products={products} brands={brands} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="import">
+          <Card>
+            <CardHeader>
+              <CardTitle>엑셀 데이터 임포트</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ExcelImporter />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
