@@ -291,7 +291,7 @@ export function SupplierOrderList({ orders }: SupplierOrderListProps) {
                           {/* 수량 */}
                           <div className="text-center min-w-[80px]">
                             <div className="text-sm font-medium">
-                              {item.requested_qty.toLocaleString()}개
+                              {(item.requested_qty ?? 0).toLocaleString()}개
                             </div>
                             {item.confirmed_qty != null && item.confirmed_qty !== item.requested_qty && (
                               <div className="text-xs text-orange-600">
