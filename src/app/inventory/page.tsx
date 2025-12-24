@@ -25,7 +25,7 @@ async function getInventoryForRuProducts() {
     .eq('status', 'active')
 
   if (!ruProducts || ruProducts.length === 0) {
-    return { inventory: [], productMap: new Map(), lotMap: new Map() }
+    return { inventory: [], productMap: new Map(), lotMap: new Map(), lotDateMap: new Map(), confirmedQtyMap: new Map() }
   }
 
   // product_code를 Map으로 변환
@@ -41,7 +41,7 @@ async function getInventoryForRuProducts() {
 
   if (error) {
     console.error('Error fetching ERP products:', error)
-    return { inventory: [], productMap, lotMap: new Map() }
+    return { inventory: [], productMap, lotMap: new Map(), lotDateMap: new Map(), confirmedQtyMap: new Map() }
   }
 
   // 3. LOT FIFO 정보 조회
@@ -55,7 +55,45 @@ async function getInventoryForRuProducts() {
     (lotFifo || []).map(lot => [lot.product_id, lot])
   )
 
-  return { inventory: erpProducts || [], productMap, lotMap }
+  // 4. LOT 제조일 정보 조회
+  const allLotNumbers: string[] = []
+  lotFifo?.forEach(lot => {
+    if (lot.lot_numbers) {
+      allLotNumbers.push(...lot.lot_numbers)
+    }
+  })
+
+  const { data: lotDates } = await supabase
+    .from('cm_lot_manufacturing_dates')
+    .select('lot_number, manufacturing_date')
+    .in('lot_number', allLotNumbers.length > 0 ? allLotNumbers : [''])
+
+  // LOT 제조일을 Map으로 변환 (lot_number -> manufacturing_date)
+  const lotDateMap = new Map(
+    (lotDates || []).map(d => [d.lot_number, d.manufacturing_date])
+  )
+
+  // 5. 출고 예정 수량 조회 (DRAFT, CONFIRMED, PACKING 상태 - 아직 출고 안된 발주)
+  const { data: pendingOrders } = await supabase
+    .from('ru_order_items')
+    .select(`
+      product_code,
+      requested_qty,
+      confirmed_qty,
+      ru_orders!inner(status)
+    `)
+    .in('product_code', productCodes)
+    .in('ru_orders.status', ['DRAFT', 'CONFIRMED', 'PACKING'])
+
+  // 품목별 출고예정 수량 합계 (confirmed_qty 있으면 사용, 없으면 requested_qty 사용)
+  const confirmedQtyMap = new Map<string, number>()
+  pendingOrders?.forEach(item => {
+    const qty = item.confirmed_qty ?? item.requested_qty ?? 0
+    const current = confirmedQtyMap.get(item.product_code) || 0
+    confirmedQtyMap.set(item.product_code, current + qty)
+  })
+
+  return { inventory: erpProducts || [], productMap, lotMap, lotDateMap, confirmedQtyMap }
 }
 
 // 유통기한 임박 LOT (ru_products 품목만)
@@ -117,7 +155,7 @@ async function getLowStockItems() {
 }
 
 export default async function InventoryPage() {
-  const [{ inventory, productMap, lotMap }, expiringLots, lowStockItems] = await Promise.all([
+  const [{ inventory, productMap, lotMap, lotDateMap, confirmedQtyMap }, expiringLots, lowStockItems] = await Promise.all([
     getInventoryForRuProducts(),
     getExpiringLots(),
     getLowStockItems()
@@ -220,6 +258,8 @@ export default async function InventoryPage() {
                 inventory={inventory}
                 productMap={productMap}
                 lotMap={lotMap}
+                lotDateMap={lotDateMap}
+                confirmedQtyMap={confirmedQtyMap}
               />
             </CardContent>
           </Card>

@@ -293,7 +293,7 @@ export function SupplierOrderList({ orders }: SupplierOrderListProps) {
                             <div className="text-sm font-medium">
                               {item.requested_qty.toLocaleString()}개
                             </div>
-                            {item.confirmed_qty !== undefined && item.confirmed_qty !== item.requested_qty && (
+                            {item.confirmed_qty != null && item.confirmed_qty !== item.requested_qty && (
                               <div className="text-xs text-orange-600">
                                 → {item.confirmed_qty.toLocaleString()}개
                               </div>

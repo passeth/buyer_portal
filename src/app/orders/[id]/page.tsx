@@ -91,11 +91,14 @@ const statusLabels: Record<string, { label: string; color: string }> = {
 }
 
 export default async function OrderDetailPage({
-  params
+  params,
+  searchParams
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ dest?: string }>
 }) {
   const { id } = await params
+  const { dest: initialDestFilter } = await searchParams
   const [order, items, packingLists] = await Promise.all([
     getOrder(id),
     getOrderItems(id),
@@ -283,6 +286,7 @@ export default async function OrderDetailPage({
                 destinationTotals={destinationTotals}
                 totalQty={order.total_qty || 0}
                 totalAmount={order.total_amount || 0}
+                initialDestinationFilter={initialDestFilter}
               />
             </CardContent>
           </Card>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   Table,
   TableBody,
@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Button } from '@/components/ui/button'
 
 interface ProductGroup {
   product_code: string
@@ -27,6 +28,7 @@ interface DestinationQtyTableProps {
   destinationTotals: Map<string, { qty: number; amount: number }>
   totalQty: number
   totalAmount: number
+  initialDestinationFilter?: string
 }
 
 type SortField = 'product_code' | 'product_name' | 'totalQty' | 'totalSubtotal' | string
@@ -37,12 +39,25 @@ export function DestinationQtyTable({
   destinations,
   destinationTotals,
   totalQty,
-  totalAmount
+  totalAmount,
+  initialDestinationFilter
 }: DestinationQtyTableProps) {
   const [sortField, setSortField] = useState<SortField>('product_code')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  const [destinationFilter, setDestinationFilter] = useState<string | null>(initialDestinationFilter || null)
+
+  useEffect(() => {
+    if (initialDestinationFilter) {
+      setDestinationFilter(initialDestinationFilter)
+    }
+  }, [initialDestinationFilter])
 
   const allDestinations = destinations.length > 0 ? destinations : ['미지정']
+
+  // Filter destinations based on selection
+  const visibleDestinations = destinationFilter
+    ? allDestinations.filter(d => d === destinationFilter)
+    : allDestinations
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('ko-KR').format(amount)
@@ -64,8 +79,17 @@ export function DestinationQtyTable({
     return <span className="ml-1 text-xs">{sortDirection === 'asc' ? '↑' : '↓'}</span>
   }
 
+  // Filter and sort product groups based on destination filter
   const sortedGroups = useMemo(() => {
-    const groups = [...productGroups]
+    let groups = [...productGroups]
+
+    // If filtering by destination, only show products with data for that destination
+    if (destinationFilter) {
+      groups = groups.filter(g => {
+        const destData = g.byDestination.get(destinationFilter)
+        return destData && destData.qty > 0
+      })
+    }
 
     groups.sort((a, b) => {
       let aVal: string | number
@@ -112,10 +136,41 @@ export function DestinationQtyTable({
     })
 
     return groups
-  }, [productGroups, sortField, sortDirection])
+  }, [productGroups, sortField, sortDirection, destinationFilter])
+
+  // Calculate filtered totals
+  const filteredTotalQty = destinationFilter
+    ? destinationTotals.get(destinationFilter)?.qty || 0
+    : totalQty
+
+  const filteredTotalAmount = destinationFilter
+    ? destinationTotals.get(destinationFilter)?.amount || 0
+    : totalAmount
 
   return (
-    <div className="overflow-auto">
+    <div className="space-y-4">
+      {/* Destination filter buttons */}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant={destinationFilter === null ? "default" : "outline"}
+          size="sm"
+          onClick={() => setDestinationFilter(null)}
+        >
+          전체
+        </Button>
+        {allDestinations.map(dest => (
+          <Button
+            key={dest}
+            variant={destinationFilter === dest ? "default" : "outline"}
+            size="sm"
+            onClick={() => setDestinationFilter(dest)}
+          >
+            {dest.split(' ')[0]}
+          </Button>
+        ))}
+      </div>
+
+      <div className="overflow-auto">
       <Table>
         <TableHeader>
           <TableRow>
@@ -131,7 +186,7 @@ export function DestinationQtyTable({
             >
               품목명 <SortIcon field="product_name" />
             </TableHead>
-            {allDestinations.map(dest => (
+            {visibleDestinations.map(dest => (
               <TableHead
                 key={dest}
                 className="text-center min-w-[100px] cursor-pointer hover:bg-muted"
@@ -164,7 +219,7 @@ export function DestinationQtyTable({
               <TableCell className="sticky left-[100px] bg-background max-w-[150px] truncate">
                 {group.product_name || '-'}
               </TableCell>
-              {allDestinations.map(dest => {
+              {visibleDestinations.map(dest => {
                 const destData = group.byDestination.get(dest)
                 return (
                   <TableCell key={dest} className="text-center">
@@ -187,9 +242,9 @@ export function DestinationQtyTable({
           {/* 목적지별 합계 행 */}
           <TableRow className="bg-muted/70 font-bold border-t-2">
             <TableCell className="sticky left-0 bg-muted/70" colSpan={2}>
-              목적지별 합계
+              {destinationFilter ? `${destinationFilter.split(' ')[0]} 합계` : '목적지별 합계'}
             </TableCell>
-            {allDestinations.map(dest => {
+            {visibleDestinations.map(dest => {
               const total = destinationTotals.get(dest)
               return (
                 <TableCell key={dest} className="text-center">
@@ -198,20 +253,20 @@ export function DestinationQtyTable({
               )
             })}
             <TableCell className="text-center bg-primary/10">
-              {totalQty.toLocaleString()}
+              {filteredTotalQty.toLocaleString()}
             </TableCell>
             <TableCell></TableCell>
             <TableCell className="text-right bg-primary/10">
-              ₩{formatCurrency(totalAmount)}
+              ₩{formatCurrency(filteredTotalAmount)}
             </TableCell>
           </TableRow>
 
           {/* 목적지별 금액 행 */}
           <TableRow className="bg-muted/50 text-sm">
             <TableCell className="sticky left-0 bg-muted/50" colSpan={2}>
-              목적지별 금액
+              {destinationFilter ? `${destinationFilter.split(' ')[0]} 금액` : '목적지별 금액'}
             </TableCell>
-            {allDestinations.map(dest => {
+            {visibleDestinations.map(dest => {
               const total = destinationTotals.get(dest)
               return (
                 <TableCell key={dest} className="text-center text-xs">
@@ -223,6 +278,7 @@ export function DestinationQtyTable({
           </TableRow>
         </TableBody>
       </Table>
+      </div>
     </div>
   )
 }

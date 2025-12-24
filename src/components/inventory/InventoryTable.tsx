@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Table,
   TableBody,
@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 
 interface InventoryItem {
   product_id: string
@@ -45,6 +46,8 @@ interface InventoryTableProps {
   inventory: InventoryItem[]
   productMap: Map<string, RuProduct>
   lotMap: Map<string, LotInfo>
+  lotDateMap: Map<string, string>  // lot_number -> manufacturing_date (YYYY-MM-DD)
+  confirmedQtyMap: Map<string, number>  // product_code -> confirmed order qty sum
 }
 
 // 컬럼 너비 설정
@@ -52,12 +55,39 @@ const defaultColumnWidths = {
   product_code: 120,
   product_name: 200,
   brand: 100,
-  stock: 100,
-  status: 80,
-  lot: 250,
+  stock: 80,
+  confirmed: 80,
+  status: 70,
+  lot: 320,
 }
 
-export function InventoryTable({ inventory, productMap, lotMap }: InventoryTableProps) {
+type SortField = 'product_code' | 'brand' | null
+type SortDirection = 'asc' | 'desc'
+
+// 제조일 포맷팅 (yy-mm-dd)
+function formatMfgDate(dateStr: string | undefined): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const yy = String(date.getFullYear()).slice(-2)
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+// 제조일로부터 남은 개월 수 계산 (유통기한 3년 기준)
+function calcRemainMonths(mfgDateStr: string | undefined): number | null {
+  if (!mfgDateStr) return null
+  const mfgDate = new Date(mfgDateStr)
+  const expiryDate = new Date(mfgDate)
+  expiryDate.setFullYear(expiryDate.getFullYear() + 3)  // 3년 후 유통기한
+
+  const now = new Date()
+  const diffMs = expiryDate.getTime() - now.getTime()
+  const diffMonths = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 30))
+  return diffMonths
+}
+
+export function InventoryTable({ inventory, productMap, lotMap, lotDateMap, confirmedQtyMap }: InventoryTableProps) {
   const [columnWidths, setColumnWidths] = useState(defaultColumnWidths)
   const [editingLot, setEditingLot] = useState<{
     productId: string
@@ -66,6 +96,47 @@ export function InventoryTable({ inventory, productMap, lotMap }: InventoryTable
   } | null>(null)
   const [newLot, setNewLot] = useState({ lotNumber: '', qty: 0 })
   const [saving, setSaving] = useState(false)
+  const [sortField, setSortField] = useState<SortField>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  // 정렬된 재고 목록
+  const sortedInventory = useMemo(() => {
+    if (!sortField) return inventory
+
+    return [...inventory].sort((a, b) => {
+      let aVal: string = ''
+      let bVal: string = ''
+
+      if (sortField === 'product_code') {
+        aVal = a.product_id
+        bVal = b.product_id
+      } else if (sortField === 'brand') {
+        aVal = productMap.get(a.product_id)?.brand || ''
+        bVal = productMap.get(b.product_id)?.brand || ''
+      }
+
+      const result = aVal.localeCompare(bVal, 'ko')
+      return sortDirection === 'asc' ? result : -result
+    })
+  }, [inventory, sortField, sortDirection, productMap])
+
+  // 정렬 토글
+  const toggleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDirection('asc')
+    }
+  }
+
+  // 정렬 아이콘
+  const SortIcon = ({ field }: { field: SortField }) => {
+    if (sortField !== field) return <ArrowUpDown className="ml-1 h-3 w-3 inline opacity-50" />
+    return sortDirection === 'asc'
+      ? <ArrowUp className="ml-1 h-3 w-3 inline text-primary" />
+      : <ArrowDown className="ml-1 h-3 w-3 inline text-primary" />
+  }
 
   // 재고 상태 계산
   const getStockStatus = (qty: number) => {
@@ -185,21 +256,33 @@ export function InventoryTable({ inventory, productMap, lotMap }: InventoryTable
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead style={{ width: columnWidths.product_code, position: 'relative' }}>
-                품목코드
+              <TableHead
+                style={{ width: columnWidths.product_code, position: 'relative' }}
+                className="cursor-pointer hover:bg-muted/50"
+                onClick={() => toggleSort('product_code')}
+              >
+                품목코드 <SortIcon field="product_code" />
                 <ResizeHandle column="product_code" />
               </TableHead>
               <TableHead style={{ width: columnWidths.product_name, position: 'relative' }}>
                 품목명
                 <ResizeHandle column="product_name" />
               </TableHead>
-              <TableHead style={{ width: columnWidths.brand, position: 'relative' }}>
-                브랜드
+              <TableHead
+                style={{ width: columnWidths.brand, position: 'relative' }}
+                className="cursor-pointer hover:bg-muted/50"
+                onClick={() => toggleSort('brand')}
+              >
+                브랜드 <SortIcon field="brand" />
                 <ResizeHandle column="brand" />
               </TableHead>
               <TableHead style={{ width: columnWidths.stock, position: 'relative' }} className="text-right">
                 현재고
                 <ResizeHandle column="stock" />
+              </TableHead>
+              <TableHead style={{ width: columnWidths.confirmed, position: 'relative' }} className="text-right">
+                출고예정
+                <ResizeHandle column="confirmed" />
               </TableHead>
               <TableHead style={{ width: columnWidths.status, position: 'relative' }}>
                 상태
@@ -213,10 +296,11 @@ export function InventoryTable({ inventory, productMap, lotMap }: InventoryTable
             </TableRow>
           </TableHeader>
           <TableBody>
-            {inventory.map(item => {
+            {sortedInventory.map(item => {
               const ruProduct = productMap.get(item.product_id)
               const status = getStockStatus(item.bal_qty || 0)
               const lotInfo = lotMap.get(item.product_id)
+              const confirmedQty = confirmedQtyMap.get(item.product_id) || 0
 
               return (
                 <TableRow key={item.product_id}>
@@ -229,27 +313,49 @@ export function InventoryTable({ inventory, productMap, lotMap }: InventoryTable
                   <TableCell className="text-right font-bold text-lg">
                     {(item.bal_qty || 0).toLocaleString()}
                   </TableCell>
+                  <TableCell className="text-right">
+                    {confirmedQty > 0 ? (
+                      <span className="font-medium text-orange-600">{confirmedQty.toLocaleString()}</span>
+                    ) : (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Badge className={status.color}>{status.label}</Badge>
                   </TableCell>
                   <TableCell>
                     {lotInfo && lotInfo.lot_numbers && lotInfo.lot_numbers.length > 0 ? (
-                      <div className="space-y-1">
-                        {lotInfo.lot_numbers.map((lot: string, idx: number) => {
-                          const qty = lotInfo.remaining_quantities?.[idx] || 0
-                          const lotStatus = lotInfo.lot_statuses?.[idx] || 'active'
-                          return (
-                            <div key={lot} className="flex items-center gap-2 text-xs">
-                              <span className="font-mono bg-muted px-1 rounded">{lot}</span>
-                              <span className={qty > 0 ? 'text-green-600' : 'text-muted-foreground'}>
-                                {qty.toLocaleString()}
-                              </span>
-                              {lotStatus === 'depleted' && (
-                                <Badge variant="outline" className="text-xs px-1 h-4">소진</Badge>
-                              )}
-                            </div>
-                          )
-                        })}
+                      <div className="space-y-0.5">
+                        {/* LOT 테이블 헤더 */}
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground border-b pb-0.5 mb-0.5">
+                          <span className="w-16">LOT</span>
+                          <span className="w-16 text-center">제조일</span>
+                          <span className="w-12 text-center">잔여월</span>
+                          <span className="w-14 text-right">수량</span>
+                        </div>
+                        {lotInfo.lot_numbers
+                          .map((lot: string, idx: number) => ({
+                            lot,
+                            qty: lotInfo.remaining_quantities?.[idx] || 0,
+                            status: lotInfo.lot_statuses?.[idx] || 'active'
+                          }))
+                          .filter(item => item.status !== 'depleted' && item.qty > 0)
+                          .map(({ lot, qty }, lotIdx) => {
+                            const mfgDate = lotDateMap.get(lot)
+                            const remainMonths = calcRemainMonths(mfgDate)
+                            return (
+                              <div key={`${lot}-${lotIdx}`} className="flex items-center gap-1 text-xs">
+                                <span className="font-mono bg-muted px-1 rounded w-16 truncate">{lot}</span>
+                                <span className="w-16 text-center text-blue-600">{formatMfgDate(mfgDate)}</span>
+                                <span className={`w-12 text-center ${remainMonths != null && remainMonths < 12 ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}>
+                                  {remainMonths != null ? `${remainMonths}M` : '-'}
+                                </span>
+                                <span className="w-14 text-right text-green-600 font-medium">
+                                  {qty.toLocaleString()}
+                                </span>
+                              </div>
+                            )
+                          })}
                       </div>
                     ) : (
                       <span className="text-muted-foreground text-xs">LOT 정보 없음</span>
@@ -267,9 +373,9 @@ export function InventoryTable({ inventory, productMap, lotMap }: InventoryTable
                 </TableRow>
               )
             })}
-            {inventory.length === 0 && (
+            {sortedInventory.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   재고 데이터가 없습니다.
                 </TableCell>
               </TableRow>

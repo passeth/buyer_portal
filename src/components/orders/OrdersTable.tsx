@@ -32,7 +32,7 @@ interface OrdersTableProps {
 
 const statusLabels: Record<OrderStatus, { label: string; color: string }> = {
   DRAFT: { label: '작성 중', color: 'bg-gray-100 text-gray-700' },
-  CONFIRMED: { label: '확정', color: 'bg-green-100 text-green-700' },
+  CONFIRMED: { label: '확정', color: 'bg-blue-100 text-blue-700' },
   PACKING: { label: '패킹', color: 'bg-purple-100 text-purple-700' },
   SHIPPED: { label: '출하', color: 'bg-cyan-100 text-cyan-700' },
   COMPLETED: { label: '완료', color: 'bg-emerald-100 text-emerald-700' },
@@ -92,8 +92,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>발주번호</TableHead>
-              <TableHead>바이어</TableHead>
+              <TableHead className="w-[180px]">발주번호</TableHead>
               <TableHead>목적지</TableHead>
               <TableHead>발주일</TableHead>
               <TableHead className="text-center">수량</TableHead>
@@ -106,7 +105,7 @@ export function OrdersTable({ orders }: OrdersTableProps) {
           <TableBody>
             {filteredOrders.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   발주 내역이 없습니다.
                 </TableCell>
               </TableRow>
@@ -117,27 +116,21 @@ export function OrdersTable({ orders }: OrdersTableProps) {
 
                 return (
                   <TableRow key={order.id}>
-                    <TableCell className="font-mono font-medium">
+                    <TableCell className="font-mono font-medium text-base w-[180px]">
                       <Link href={`/orders/${order.id}`} className="hover:underline text-primary">
                         {order.order_number}
                       </Link>
                     </TableCell>
-                    <TableCell>
-                      {order.buyer_name || '-'}
-                    </TableCell>
-                    <TableCell>
+                    <TableCell className="align-top py-2">
                       {order.destinations && order.destinations.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {order.destinations.slice(0, 2).map((dest, idx) => (
-                            <Badge key={idx} variant="outline" className="text-xs">
-                              {dest.split(' ')[0]}
-                            </Badge>
+                        <div className="flex flex-col gap-1">
+                          {order.destinations.map((dest, idx) => (
+                            <Link key={idx} href={`/orders/${order.id}?dest=${encodeURIComponent(dest)}`}>
+                              <Badge variant="outline" className="text-xs cursor-pointer hover:bg-muted w-fit">
+                                {dest.split(' ')[0]}
+                              </Badge>
+                            </Link>
                           ))}
-                          {order.destinations.length > 2 && (
-                            <Badge variant="outline" className="text-xs">
-                              +{order.destinations.length - 2}
-                            </Badge>
-                          )}
                         </div>
                       ) : (
                         <span className="text-muted-foreground">
@@ -159,12 +152,12 @@ export function OrdersTable({ orders }: OrdersTableProps) {
                         {status?.label || order.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-center align-top py-3">
+                    <TableCell className="align-top py-2">
                       {hasPackingList ? (
-                        <div className="flex flex-wrap gap-1 justify-center">
+                        <div className="flex flex-col gap-1">
                           {order.packing_lists!.map((pl, idx) => (
                             <Link key={idx} href={`/packing/${pl}`}>
-                              <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-muted whitespace-nowrap">
+                              <Badge variant="secondary" className="text-xs cursor-pointer hover:bg-muted whitespace-nowrap w-fit">
                                 {pl}
                               </Badge>
                             </Link>
